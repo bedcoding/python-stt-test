@@ -14,6 +14,7 @@ class AudioSTTApp:
         
         self.is_recording = False
         self.transcript = ""
+        self.recent_transcript = ""  # 최근 텍스트 (마지막 100자)를 저장하는 변수
         self.error_count = 0  # 오류 발생 횟수를 추적하는 변수 추가
         
         # UI 구성
@@ -44,9 +45,23 @@ class AudioSTTApp:
         self.status_label = ttk.Label(control_frame, text="대기 중")
         self.status_label.pack(side=tk.RIGHT, padx=5)
         
+        # 컨텐츠 프레임 (텍스트 영역들을 담을 프레임)
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # 전체 텍스트 레이블
+        ttk.Label(content_frame, text="전체 텍스트:").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        
         # 텍스트 영역
-        self.text_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, font=("맑은 고딕", 10))
-        self.text_area.pack(fill=tk.BOTH, expand=True)
+        self.text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=10)
+        self.text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 10))
+        
+        # 최근 텍스트 레이블 
+        ttk.Label(content_frame, text="최근 텍스트 (마지막 100자):").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        
+        # 최근 텍스트 영역
+        self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
+        self.recent_text_area.pack(fill=tk.X, padx=5)
         
         # 디바이스 정보 표시
         self.show_available_devices()
@@ -115,7 +130,7 @@ class AudioSTTApp:
             FORMAT = pyaudio.paInt16
             CHANNELS = 2
             RATE = 44100
-            RECORD_SECONDS = 5  # 5초 단위로 녹음 후 변환
+            RECORD_SECONDS = 10  # 10초 단위로 녹음 후 변환
             
             stream = p.open(format=FORMAT,
                         channels=CHANNELS,
@@ -186,16 +201,30 @@ class AudioSTTApp:
         else:
             self.transcript += text + " "
             
+        # 마지막 100자 추출하여 recent_transcript 업데이트
+        if len(self.transcript) <= 100:
+            self.recent_transcript = self.transcript
+        else:
+            self.recent_transcript = self.transcript[-100:]
+            
+        # 전체 텍스트 영역 업데이트
         self.text_area.delete(1.0, tk.END)
         self.text_area.insert(tk.END, self.transcript)
         self.text_area.see(tk.END)
+        
+        # 최근 텍스트 영역 업데이트
+        self.recent_text_area.delete(1.0, tk.END)
+        self.recent_text_area.insert(tk.END, self.recent_transcript)
+        self.recent_text_area.see(tk.END)
     
     def update_status(self, message):
         self.root.after(0, lambda: self.status_label.config(text=message))
     
     def clear_transcript(self):
         self.transcript = ""
+        self.recent_transcript = ""  # recent_transcript도 함께 초기화
         self.text_area.delete(1.0, tk.END)
+        self.recent_text_area.delete(1.0, tk.END)  # 최근 텍스트 영역도 초기화
     
     def save_transcript(self):
         filename = "transcript.txt"
