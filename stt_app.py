@@ -18,12 +18,12 @@ class AudioSTTApp:
         self.root.geometry("800x600")  # 창 크기 확대
         
         # STT 처리 간격 설정 (초)
-        self.RECORD_SECONDS = 2  # 2초마다 처리
+        self.RECORD_SECONDS = 5  # 5초마다 처리
         
         self.is_recording = False
         self.transcript = ""
-        self.recent_transcript = ""  # 최근 텍스트 (마지막 100자)를 저장하는 변수
-        self.recent_history = []  # 마지막 100자 텍스트 히스토리를 저장하는 리스트 (ChatGPT에 전송되는 내용)
+        self.recent_transcript = ""  # 최근 텍스트 (마지막 300자)를 저장하는 변수
+        self.recent_history = []  # 마지막 300자 텍스트 히스토리를 저장하는 리스트 (ChatGPT에 전송되는 내용)
         self.error_count = 0  # 오류 발생 횟수를 추적하는 변수 추가
         
         # 오디오 스트리밍을 위한 변수들
@@ -33,7 +33,7 @@ class AudioSTTApp:
         
         # ChatGPT 관련 변수
         self.chatgpt_api_key = ""
-        self.chatgpt_prompt = "이 문장은 상대방이 발언한 말을 STT로 추출해서 마지막 100자만 가져온 것이다. 따라서 문장의 앞부분이 잘려 있다. 잘린 문장의 뒷부분에서 상대방이 마지막으로 한 질문이 뭔지 확인해서 그에 대한 적절한 답장을 해라"
+        self.chatgpt_prompt = ""
         self.chatgpt_response = ""
         
         # UI 구성
@@ -78,7 +78,7 @@ class AudioSTTApp:
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # 기본 API 키 값 설정
-        
+        self.api_key_entry.insert(0, "")  # "귀찮으면 여기다 미리 API 키를 넣으시오 (* 대신 키값 그대로 깃허브에 푸시하면 인생망함)
         
         # 컨텐츠 프레임 (텍스트 영역들을 담을 프레임)
         content_frame = ttk.Frame(main_frame)
@@ -88,25 +88,25 @@ class AudioSTTApp:
         ttk.Label(content_frame, text="전체 텍스트:").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
         # 텍스트 영역
-        self.text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=8)
-        self.text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 10))
+        self.text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=1)
+        self.text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
         
         # 최근 텍스트 레이블 
-        ttk.Label(content_frame, text="ChatGPT 전송 텍스트 히스토리 (마지막 100자):").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        ttk.Label(content_frame, text="ChatGPT 전송 텍스트 히스토리 (마지막 300자):").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
         # 최근 텍스트 영역
-        self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
+        self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=1)
         self.recent_text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
         
         # ChatGPT 응답 레이블
         ttk.Label(content_frame, text="AI 응답:").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
-        # ChatGPT 응답 영역
-        self.chatgpt_response_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5, bg="#f8f8f8")
-        self.chatgpt_response_area.pack(fill=tk.X, padx=5)
+        # ChatGPT 응답 영역 (화면 꽉 차게!)
+        self.chatgpt_response_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=20, bg="#f8f8f8")
+        self.chatgpt_response_area.pack(fill=tk.BOTH, expand=True, padx=5)
         
         # 디바이스 정보 표시
-        self.show_available_devices()
+        # self.show_available_devices()
         
     def show_available_devices(self):
         # 디바이스 정보 프레임
@@ -281,6 +281,11 @@ class AudioSTTApp:
                             if text.strip():
                                 self.update_transcript(text, success=True)
                                 self.error_count = 0
+                                
+                                # STT 완료 후 자동으로 ChatGPT API 호출
+                                if self.recent_transcript.strip():
+                                    print("[DEBUG] STT 완료, 자동으로 ChatGPT API 호출 시작...")
+                                    threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
                             else:
                                 print("[DEBUG] 빈 텍스트 결과, 건너뜀")
                                 
@@ -317,15 +322,15 @@ class AudioSTTApp:
         else:
             self.transcript += text + " "
             
-        # 마지막 100자 추출하여 recent_transcript 업데이트
-        if len(self.transcript) <= 100:
+        # 마지막 300자 추출하여 recent_transcript 업데이트
+        if len(self.transcript) <= 300:
             self.recent_transcript = self.transcript
         else:
-            self.recent_transcript = self.transcript[-100:]
+            self.recent_transcript = self.transcript[-300:]
         
-        # 마지막 100자 텍스트를 히스토리에 추가 (타임스탬프 포함)
+        # 마지막 300자 텍스트를 히스토리에 추가 (타임스탬프 포함)
         if text.strip():  # 빈 텍스트가 아닌 경우만 추가
-            # 현재의 마지막 100자를 히스토리에 추가
+            # 현재의 마지막 300자를 히스토리에 추가
             self.recent_history.append(f"[{current_time}] {self.recent_transcript}")
             # 최대 20개 항목만 유지
             if len(self.recent_history) > 20:
@@ -336,7 +341,7 @@ class AudioSTTApp:
         self.text_area.insert(tk.END, self.transcript)
         self.text_area.see(tk.END)
         
-        # 마지막 100자 히스토리 영역 업데이트
+        # 마지막 300자 히스토리 영역 업데이트
         self.recent_text_area.delete(1.0, tk.END)
         self.recent_text_area.insert(tk.END, "\n".join(self.recent_history))
         self.recent_text_area.see(tk.END)
@@ -392,9 +397,9 @@ class AudioSTTApp:
             
             # API 호출 (새로운 방식)
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo", #"gpt-4.1",
+                model="gpt-4.1",
                 messages=[
-                    {"role": "system", "content": "당신은 상대방의 말에 답변을 해야 하는 사람입니다."},
+                    {"role": "system", "content": ""},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
