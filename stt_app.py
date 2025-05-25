@@ -17,6 +17,9 @@ class AudioSTTApp:
         self.root.title("STT 변환기")
         self.root.geometry("800x600")  # 창 크기 확대
         
+        # STT 처리 간격 설정 (초)
+        self.RECORD_SECONDS = 2  # 2초마다 처리
+        
         self.is_recording = False
         self.transcript = ""
         self.recent_transcript = ""  # 최근 텍스트 (마지막 100자)를 저장하는 변수
@@ -25,7 +28,7 @@ class AudioSTTApp:
         
         # 오디오 스트리밍을 위한 변수들
         self.audio_queue = queue.Queue()
-        self.audio_buffer = collections.deque(maxlen=44100*2*2*10)  # 10초분 버퍼 (44.1kHz, 16bit, 2ch)
+        self.audio_buffer = collections.deque(maxlen=44100*2*2*self.RECORD_SECONDS)  # 설정된 시간만큼 버퍼 (44.1kHz, 16bit, 2ch)
         self.recording_lock = threading.Lock()
         
         # ChatGPT 관련 변수
@@ -75,7 +78,7 @@ class AudioSTTApp:
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # 기본 API 키 값 설정
-        self.api_key_entry.insert(0, "귀찮으면 여기다 미리 API 키를 넣으시오 (* 대신 키값 그대로 깃허브에 푸시하면 인생망함)")
+        
         
         # 컨텐츠 프레임 (텍스트 영역들을 담을 프레임)
         content_frame = ttk.Frame(main_frame)
@@ -228,7 +231,6 @@ class AudioSTTApp:
         RATE = 44100
         CHANNELS = 2
         FORMAT = pyaudio.paInt16
-        RECORD_SECONDS = 10  # 10초마다 처리
         
         # PyAudio 인스턴스 생성 (sample width 얻기 위해)
         p = pyaudio.PyAudio()
@@ -242,13 +244,13 @@ class AudioSTTApp:
         while self.is_recording:
             current_time = time.time()
             
-            # 10초마다 처리
-            if current_time - last_process_time >= RECORD_SECONDS:
+            # 설정된 간격마다 처리
+            if current_time - last_process_time >= self.RECORD_SECONDS:
                 try:
-                    # 현재 버퍼에서 10초분 데이터 추출
+                    # 현재 버퍼에서 설정된 시간분 데이터 추출
                     with self.recording_lock:
                         if len(self.audio_buffer) > 0:
-                            # 버퍼의 모든 데이터를 복사 (최대 10초분)
+                            # 버퍼의 모든 데이터를 복사 (최대 설정된 시간분)
                             audio_data = bytes(self.audio_buffer)
                         else:
                             audio_data = b''
