@@ -35,7 +35,7 @@ class AudioSTTApp:
         
         # ChatGPT 관련 변수
         self.chatgpt_api_key = ""
-        self.chatgpt_prompt = "적절한 답장을 해라"
+        self.chatgpt_prompt = "발언: "
         self.chatgpt_response = ""
         
         # 마우스 움직임 감지 관련 변수
@@ -88,7 +88,7 @@ class AudioSTTApp:
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # 기본 API 키 값 설정
-        self.api_key_entry.insert(0, "")  # "귀찮으면 여기다 미리 API 키를 넣으시오 (* 대신 키값 그대로 깃허브에 푸시하면 인생망함)
+        self.api_key_entry.insert(0, "")
         
         # 컨텐츠 프레임 (텍스트 영역들을 담을 프레임)
         content_frame = ttk.Frame(main_frame)
@@ -108,11 +108,18 @@ class AudioSTTApp:
         self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
         self.recent_text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
         
+        # ChatGPT 전송 텍스트 확인 레이블
+        ttk.Label(content_frame, text="AI에게 전송된 텍스트:").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        
+        # ChatGPT 전송 텍스트 확인 영역 (1줄)
+        self.sent_text_entry = ttk.Entry(content_frame, font=("맑은 고딕", 9), state="readonly")
+        self.sent_text_entry.pack(fill=tk.X, padx=5, pady=(0, 10))
+        
         # ChatGPT 응답 레이블
         ttk.Label(content_frame, text="AI 응답:").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
         # ChatGPT 응답 영역 (화면 꽉 차게!)
-        self.chatgpt_response_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=20, bg="#f8f8f8")
+        self.chatgpt_response_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=18, bg="#f8f8f8")
         self.chatgpt_response_area.pack(fill=tk.BOTH, expand=True, padx=5)
         
         # 디바이스 정보 표시
@@ -130,10 +137,20 @@ class AudioSTTApp:
             dy = abs(y - self.last_mouse_pos[1])
             
             if dx > 10 or dy > 10:  # 10픽셀 이상 움직였을 때만 감지
-                if not self.isGPT:  # 현재 GPT 호출 중이 아닐 때만
+                if not self.isGPT and self.recent_transcript.strip() and self.is_recording:  # 녹음 중이고, GPT 호출 중이 아니고, 텍스트가 있을 때만
                     print(f"[DEBUG] 마우스 움직임 감지! 위치: ({x}, {y})")
+                    print(f"[DEBUG] 즉시 ChatGPT API 호출 - 현재 텍스트: '{self.recent_transcript}'")
                     self.isGPT = True
-                    self.update_status("마우스 감지됨 - AI 답변 준비 중...")
+                    self.update_status("마우스 감지됨 - AI 답변 요청 중...")
+                    
+                    # API 키 가져오기
+                    api_key = self.api_key_entry.get().strip()
+                    if api_key:
+                        # 즉시 ChatGPT API 호출
+                        threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
+                    else:
+                        print("[ERROR] API 키가 없어서 ChatGPT 호출 불가")
+                        self.isGPT = False
                 
                 self.last_mouse_pos = (x, y)
         
@@ -321,11 +338,6 @@ class AudioSTTApp:
                             if text.strip():
                                 self.update_transcript(text, success=True)
                                 self.error_count = 0
-                                
-                                # 마우스 움직임이 감지되었을 때만 ChatGPT API 호출
-                                if self.isGPT and self.recent_transcript.strip():
-                                    print("[DEBUG] 마우스 트리거로 ChatGPT API 호출 시작...")
-                                    threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
                             else:
                                 print("[DEBUG] 빈 텍스트 결과, 건너뜀")
                                 
@@ -354,6 +366,18 @@ class AudioSTTApp:
     def update_transcript(self, text, success=False):
         # 현재 시간 가져오기
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # 노이즈 텍스트 필터링 (하드코딩 예외처리)
+        noise_texts = [
+            "시청해주셔서 감사합니다.",
+            "시청해주셔서 감사합니다!"
+        ]
+        
+        # 인식된 텍스트가 노이즈인지 확인
+        cleaned_text = text.strip()
+        if cleaned_text in noise_texts:
+            print(f"[DEBUG] 노이즈 텍스트 필터링됨: '{cleaned_text}'")
+            return  # 노이즈면 처리하지 않고 바로 리턴
         
         # 성공적인 인식이고 이전에 오류가 2회 이상 발생했을 경우 줄바꿈 추가
         if success and self.error_count >= 2:
@@ -397,6 +421,11 @@ class AudioSTTApp:
         # self.text_area.delete(1.0, tk.END)  # 기존 전체 텍스트 영역 (숨김 처리로 주석)
         self.recent_text_area.delete(1.0, tk.END)  # 시간대별 전체 텍스트 영역 초기화
         self.chatgpt_response_area.delete(1.0, tk.END)  # ChatGPT 응답 영역도 초기화
+        
+        # 전송된 텍스트 표시창도 초기화
+        self.sent_text_entry.config(state="normal")
+        self.sent_text_entry.delete(0, tk.END)
+        self.sent_text_entry.config(state="readonly")
     
     def save_transcript(self):
         filename = "transcript.txt"
@@ -424,6 +453,9 @@ class AudioSTTApp:
     
     def _call_chatgpt_api(self, api_key, text):
         try:
+            # UI에 전송된 텍스트 표시
+            self.root.after(0, self._update_sent_text, text)
+            
             # OpenAI API 설정 (새로운 방식)
             client = OpenAI(api_key=api_key)
             
@@ -439,7 +471,8 @@ class AudioSTTApp:
             response = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[
-                    {"role": "system", "content": "질문에 답변을 해야 합니다."},
+                    {"role": "system", "content": """
+"""},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
@@ -474,6 +507,17 @@ class AudioSTTApp:
     def _update_chatgpt_response_area(self):
         self.chatgpt_response_area.delete(1.0, tk.END)
         self.chatgpt_response_area.insert(tk.END, self.chatgpt_response)
+    
+    def _update_sent_text(self, text):
+        """전송된 텍스트를 UI에 표시"""
+        self.sent_text_entry.config(state="normal")
+        self.sent_text_entry.delete(0, tk.END)
+        # 텍스트가 너무 길면 마지막 80자만 표시
+        display_text = text[-80:] if len(text) > 80 else text
+        if len(text) > 80:
+            display_text = "..." + display_text
+        self.sent_text_entry.insert(0, display_text)
+        self.sent_text_entry.config(state="readonly")
 
 if __name__ == "__main__":
     root = tk.Tk()
