@@ -8,6 +8,8 @@ import os
 import datetime
 from openai import OpenAI
 import time
+import queue
+import collections
 
 class AudioSTTApp:
     def __init__(self, root):
@@ -20,6 +22,11 @@ class AudioSTTApp:
         self.recent_transcript = ""  # 최근 텍스트 (마지막 100자)를 저장하는 변수
         self.recent_history = []  # 마지막 100자 텍스트 히스토리를 저장하는 리스트 (ChatGPT에 전송되는 내용)
         self.error_count = 0  # 오류 발생 횟수를 추적하는 변수 추가
+        
+        # 오디오 스트리밍을 위한 변수들
+        self.audio_queue = queue.Queue()
+        self.audio_buffer = collections.deque(maxlen=44100*2*2*10)  # 10초분 버퍼 (44.1kHz, 16bit, 2ch)
+        self.recording_lock = threading.Lock()
         
         # ChatGPT 관련 변수
         self.chatgpt_api_key = ""
@@ -66,6 +73,9 @@ class AudioSTTApp:
         ttk.Label(api_frame, text="OpenAI API 키:").pack(side=tk.LEFT, padx=5)
         self.api_key_entry = ttk.Entry(api_frame, width=50, show="*")
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # 기본 API 키 값 설정
+        self.api_key_entry.insert(0, "귀찮으면 여기다 미리 API 키를 넣으시오 (* 대신 키값 그대로 깃허브에 푸시하면 인생망함)")
         
         # 컨텐츠 프레임 (텍스트 영역들을 담을 프레임)
         content_frame = ttk.Frame(main_frame)
@@ -159,7 +169,6 @@ class AudioSTTApp:
             FORMAT = pyaudio.paInt16
             CHANNELS = 2
             RATE = 44100
-            RECORD_SECONDS = 10  # 10초 단위로 녹음 후 변환
             
             stream = p.open(format=FORMAT,
                         channels=CHANNELS,
@@ -178,70 +187,122 @@ class AudioSTTApp:
                 self.record_button.config(text="녹음 시작")
                 return
             
-            client = OpenAI(api_key=api_key)
+            # STT 처리 스레드 시작
+            stt_thread = threading.Thread(target=self.stt_processor, args=(api_key,), daemon=True)
+            stt_thread.start()
             
-            # 녹음 루프
+            # 연속 오디오 수집 루프 (절대 멈추지 않음)
+            print("[DEBUG] 연속 오디오 수집 시작...")
             while self.is_recording:
-                frames = []
-                for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
-                    if not self.is_recording:
-                        break
-                    data = stream.read(CHUNK)
-                    frames.append(data)
-                
-                if not frames:
+                try:
+                    data = stream.read(CHUNK, exception_on_overflow=False)
+                    
+                    # 오디오 데이터를 버퍼에 추가
+                    with self.recording_lock:
+                        for byte in data:
+                            self.audio_buffer.append(byte)
+                    
+                    # 큐에도 추가 (STT 처리용)
+                    self.audio_queue.put(data)
+                    
+                except Exception as e:
+                    print(f"[ERROR] 오디오 읽기 오류: {str(e)}")
                     continue
-                
-                # 임시 WAV 파일로 저장
-                temp_wav = "temp_audio.wav"
-                with wave.open(temp_wav, "wb") as wf:
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(p.get_sample_size(FORMAT))
-                    wf.setframerate(RATE)
-                    wf.writeframes(b''.join(frames))
-                
-                # OpenAI Whisper STT 변환
-                try:
-                    print(f"[DEBUG] OpenAI Whisper STT 변환 시작...")
-                    
-                    with open(temp_wav, "rb") as audio_file:
-                        transcript = client.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=audio_file,
-                            language="ko"  # 한국어 지정
-                        )
-                    
-                    text = transcript.text
-                    print(f"[DEBUG] Whisper STT 결과: '{text}'")
-                    
-                    if text.strip():  # 빈 텍스트가 아닌 경우만 처리
-                        self.update_transcript(text, success=True)
-                        self.error_count = 0  # 성공 시 오류 카운트 초기화
-                    else:
-                        print("[DEBUG] 빈 텍스트 결과, 건너뜀")
-                        
-                except Exception as stt_error:
-                    print(f"[ERROR] Whisper STT 오류: {str(stt_error)}")
-                    self.update_status(f"음성 인식 오류: {str(stt_error)}")
-                    self.error_count += 1
-                
-                # 임시 파일 삭제
-                try:
-                    os.remove(temp_wav)
-                except:
-                    pass
             
             # 스트림 정리
             stream.stop_stream()
             stream.close()
             p.terminate()
+            print("[DEBUG] 오디오 수집 종료")
             
         except Exception as e:
             print(f"[ERROR] 녹음 오류: {str(e)}")
             self.update_status(f"오류 발생: {str(e)}")
-            self.error_count += 1  # 오류 카운트 증가
+            self.error_count += 1
             self.is_recording = False
             self.record_button.config(text="녹음 시작")
+    
+    def stt_processor(self, api_key):
+        """별도 스레드에서 STT 처리"""
+        client = OpenAI(api_key=api_key)
+        RATE = 44100
+        CHANNELS = 2
+        FORMAT = pyaudio.paInt16
+        RECORD_SECONDS = 10  # 10초마다 처리
+        
+        # PyAudio 인스턴스 생성 (sample width 얻기 위해)
+        p = pyaudio.PyAudio()
+        sample_width = p.get_sample_size(FORMAT)
+        p.terminate()
+        
+        print("[DEBUG] STT 처리 스레드 시작...")
+        
+        last_process_time = time.time()
+        
+        while self.is_recording:
+            current_time = time.time()
+            
+            # 10초마다 처리
+            if current_time - last_process_time >= RECORD_SECONDS:
+                try:
+                    # 현재 버퍼에서 10초분 데이터 추출
+                    with self.recording_lock:
+                        if len(self.audio_buffer) > 0:
+                            # 버퍼의 모든 데이터를 복사 (최대 10초분)
+                            audio_data = bytes(self.audio_buffer)
+                        else:
+                            audio_data = b''
+                    
+                    if len(audio_data) > 0:
+                        # 임시 WAV 파일로 저장
+                        temp_wav = f"temp_audio_{int(current_time)}.wav"
+                        try:
+                            with wave.open(temp_wav, "wb") as wf:
+                                wf.setnchannels(CHANNELS)
+                                wf.setsampwidth(sample_width)
+                                wf.setframerate(RATE)
+                                wf.writeframes(audio_data)
+                            
+                            # OpenAI Whisper STT 변환
+                            print(f"[DEBUG] OpenAI Whisper STT 변환 시작... (파일 크기: {len(audio_data)} bytes)")
+                            
+                            with open(temp_wav, "rb") as audio_file:
+                                transcript = client.audio.transcriptions.create(
+                                    model="whisper-1",
+                                    file=audio_file,
+                                    language="ko"
+                                )
+                            
+                            text = transcript.text
+                            print(f"[DEBUG] Whisper STT 결과: '{text}'")
+                            
+                            if text.strip():
+                                self.update_transcript(text, success=True)
+                                self.error_count = 0
+                            else:
+                                print("[DEBUG] 빈 텍스트 결과, 건너뜀")
+                                
+                        except Exception as stt_error:
+                            print(f"[ERROR] Whisper STT 오류: {str(stt_error)}")
+                            self.update_status(f"음성 인식 오류: {str(stt_error)}")
+                            self.error_count += 1
+                        
+                        finally:
+                            # 임시 파일 삭제
+                            try:
+                                os.remove(temp_wav)
+                            except:
+                                pass
+                    
+                    last_process_time = current_time
+                    
+                except Exception as e:
+                    print(f"[ERROR] STT 처리 오류: {str(e)}")
+            
+            # 0.1초 대기 (이거 없으면 while문 미친듯이 돌면서 CPU 100% 소모함;;)
+            time.sleep(0.1)
+        
+        print("[DEBUG] STT 처리 스레드 종료")
     
     def update_transcript(self, text, success=False):
         # 현재 시간 가져오기
