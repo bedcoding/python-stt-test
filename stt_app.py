@@ -10,6 +10,8 @@ from openai import OpenAI
 import time
 import queue
 import collections
+import pynput
+from pynput import mouse
 
 class AudioSTTApp:
     def __init__(self, root):
@@ -33,11 +35,19 @@ class AudioSTTApp:
         
         # ChatGPT 관련 변수
         self.chatgpt_api_key = ""
-        self.chatgpt_prompt = ""
+        self.chatgpt_prompt = "적절한 답장을 해라"
         self.chatgpt_response = ""
+        
+        # 마우스 움직임 감지 관련 변수
+        self.isGPT = False  # ChatGPT 호출 플래그
+        self.last_mouse_pos = None  # 마지막 마우스 위치
+        self.mouse_listener = None  # 마우스 리스너
         
         # UI 구성
         self.create_widgets()
+        
+        # 마우스 움직임 감지 시작
+        self.start_mouse_listener()
         
     def create_widgets(self):
         # 메인 프레임
@@ -84,18 +94,18 @@ class AudioSTTApp:
         content_frame = ttk.Frame(main_frame)
         content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        # 전체 텍스트 레이블
+        # 전체 텍스트 레이블 (숨김 처리)
+        # ttk.Label(content_frame, text="전체 텍스트:").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        
+        # 텍스트 영역 (숨김 처리)
+        # self.text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
+        # self.text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
+        
+        # 전체 텍스트 레이블 (시간대별 정리)
         ttk.Label(content_frame, text="전체 텍스트:").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
-        # 텍스트 영역
-        self.text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=1)
-        self.text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
-        
-        # 최근 텍스트 레이블 
-        ttk.Label(content_frame, text="ChatGPT 전송 텍스트 히스토리 (마지막 300자):").pack(anchor=tk.W, padx=5, pady=(0, 5))
-        
-        # 최근 텍스트 영역
-        self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=1)
+        # 전체 텍스트 영역 (시간대별 정리)
+        self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
         self.recent_text_area.pack(fill=tk.X, padx=5, pady=(0, 10))
         
         # ChatGPT 응답 레이블
@@ -107,6 +117,36 @@ class AudioSTTApp:
         
         # 디바이스 정보 표시
         # self.show_available_devices()
+    
+    def start_mouse_listener(self):
+        """마우스 움직임 감지 시작"""
+        def on_move(x, y):
+            if self.last_mouse_pos is None:
+                self.last_mouse_pos = (x, y)
+                return
+            
+            # 마우스가 움직였는지 확인 (약간의 임계값 설정)
+            dx = abs(x - self.last_mouse_pos[0])
+            dy = abs(y - self.last_mouse_pos[1])
+            
+            if dx > 10 or dy > 10:  # 10픽셀 이상 움직였을 때만 감지
+                if not self.isGPT:  # 현재 GPT 호출 중이 아닐 때만
+                    print(f"[DEBUG] 마우스 움직임 감지! 위치: ({x}, {y})")
+                    self.isGPT = True
+                    self.update_status("마우스 감지됨 - AI 답변 준비 중...")
+                
+                self.last_mouse_pos = (x, y)
+        
+        # 마우스 리스너 시작
+        self.mouse_listener = mouse.Listener(on_move=on_move)
+        self.mouse_listener.start()
+        print("[DEBUG] 마우스 움직임 감지 시작됨")
+    
+    def stop_mouse_listener(self):
+        """마우스 움직임 감지 중지"""
+        if self.mouse_listener:
+            self.mouse_listener.stop()
+            print("[DEBUG] 마우스 움직임 감지 중지됨")
         
     def show_available_devices(self):
         # 디바이스 정보 프레임
@@ -282,10 +322,10 @@ class AudioSTTApp:
                                 self.update_transcript(text, success=True)
                                 self.error_count = 0
                                 
-                                # STT 완료 후 자동으로 ChatGPT API 호출
-                                # if self.recent_transcript.strip():
-                                #     print("[DEBUG] STT 완료, 자동으로 ChatGPT API 호출 시작...")
-                                #     threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
+                                # 마우스 움직임이 감지되었을 때만 ChatGPT API 호출
+                                if self.isGPT and self.recent_transcript.strip():
+                                    print("[DEBUG] 마우스 트리거로 ChatGPT API 호출 시작...")
+                                    threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
                             else:
                                 print("[DEBUG] 빈 텍스트 결과, 건너뜀")
                                 
@@ -328,20 +368,20 @@ class AudioSTTApp:
         else:
             self.recent_transcript = self.transcript[-300:]
         
-        # 마지막 300자 텍스트를 히스토리에 추가 (타임스탬프 포함)
+        # STT 결과를 시간대별 히스토리에 추가
         if text.strip():  # 빈 텍스트가 아닌 경우만 추가
-            # 현재의 마지막 300자를 히스토리에 추가
-            self.recent_history.append(f"[{current_time}] {self.recent_transcript}")
+            # 새로운 STT 결과를 시간과 함께 히스토리에 추가
+            self.recent_history.append(f"[{current_time}] {text.strip()}")
             # 최대 20개 항목만 유지
             if len(self.recent_history) > 20:
                 self.recent_history = self.recent_history[-20:]
             
-        # 전체 텍스트 영역 업데이트
-        self.text_area.delete(1.0, tk.END)
-        self.text_area.insert(tk.END, self.transcript)
-        self.text_area.see(tk.END)
+        # 전체 텍스트 영역 업데이트 (숨김 처리로 주석)
+        # self.text_area.delete(1.0, tk.END)
+        # self.text_area.insert(tk.END, self.transcript)
+        # self.text_area.see(tk.END)
         
-        # 마지막 300자 히스토리 영역 업데이트
+        # 시간대별 전체 텍스트 영역 업데이트
         self.recent_text_area.delete(1.0, tk.END)
         self.recent_text_area.insert(tk.END, "\n".join(self.recent_history))
         self.recent_text_area.see(tk.END)
@@ -354,8 +394,8 @@ class AudioSTTApp:
         self.recent_transcript = ""  # recent_transcript도 함께 초기화
         self.recent_history = []  # 히스토리도 초기화
         self.chatgpt_response = ""  # ChatGPT 응답도 초기화
-        self.text_area.delete(1.0, tk.END)
-        self.recent_text_area.delete(1.0, tk.END)  # 최근 텍스트 영역도 초기화
+        # self.text_area.delete(1.0, tk.END)  # 기존 전체 텍스트 영역 (숨김 처리로 주석)
+        self.recent_text_area.delete(1.0, tk.END)  # 시간대별 전체 텍스트 영역 초기화
         self.chatgpt_response_area.delete(1.0, tk.END)  # ChatGPT 응답 영역도 초기화
     
     def save_transcript(self):
@@ -399,7 +439,7 @@ class AudioSTTApp:
             response = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[
-                    {"role": "system", "content": ""},
+                    {"role": "system", "content": "질문에 답변을 해야 합니다."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
@@ -418,11 +458,18 @@ class AudioSTTApp:
             self.root.after(0, self._update_chatgpt_response_area)
             self.root.after(0, lambda: self.update_status("AI 응답 완료"))
             
+            # ChatGPT 호출 완료 후 플래그 리셋
+            self.isGPT = False
+            print("[DEBUG] ChatGPT 호출 완료, 플래그 리셋됨")
+            
         except Exception as e:
             # 오류 메시지를 터미널과 UI 모두에 출력
             error_message = f"AI 응답 오류: {str(e)}"
             print(f"[ERROR] {error_message}")  # 터미널 출력
             self.root.after(0, lambda: self.update_status(error_message))
+            
+            # 오류 발생 시에도 플래그 리셋
+            self.isGPT = False
     
     def _update_chatgpt_response_area(self):
         self.chatgpt_response_area.delete(1.0, tk.END)
