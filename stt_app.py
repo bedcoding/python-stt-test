@@ -5,6 +5,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 import os
+import datetime
 
 class AudioSTTApp:
     def __init__(self, root):
@@ -15,6 +16,7 @@ class AudioSTTApp:
         self.is_recording = False
         self.transcript = ""
         self.recent_transcript = ""  # 최근 텍스트 (마지막 100자)를 저장하는 변수
+        self.recent_history = []  # 최근 인식된 텍스트 히스토리를 저장하는 리스트
         self.error_count = 0  # 오류 발생 횟수를 추적하는 변수 추가
         
         # UI 구성
@@ -57,7 +59,7 @@ class AudioSTTApp:
         self.text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 10))
         
         # 최근 텍스트 레이블 
-        ttk.Label(content_frame, text="최근 텍스트 (마지막 100자):").pack(anchor=tk.W, padx=5, pady=(0, 5))
+        ttk.Label(content_frame, text="최근 인식 히스토리:").pack(anchor=tk.W, padx=5, pady=(0, 5))
         
         # 최근 텍스트 영역
         self.recent_text_area = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, font=("맑은 고딕", 10), height=5)
@@ -194,6 +196,9 @@ class AudioSTTApp:
             self.record_button.config(text="녹음 시작")
     
     def update_transcript(self, text, success=False):
+        # 현재 시간 가져오기
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        
         # 성공적인 인식이고 이전에 오류가 2회 이상 발생했을 경우 줄바꿈 추가
         if success and self.error_count >= 2:
             self.transcript += "\n" + text + " "
@@ -206,15 +211,22 @@ class AudioSTTApp:
             self.recent_transcript = self.transcript
         else:
             self.recent_transcript = self.transcript[-100:]
+        
+        # 인식된 텍스트를 히스토리에 추가 (타임스탬프 포함)
+        if text.strip():  # 빈 텍스트가 아닌 경우만 추가
+            self.recent_history.append(f"[{current_time}] {text}")
+            # 최대 20개 항목만 유지
+            if len(self.recent_history) > 20:
+                self.recent_history = self.recent_history[-20:]
             
         # 전체 텍스트 영역 업데이트
         self.text_area.delete(1.0, tk.END)
         self.text_area.insert(tk.END, self.transcript)
         self.text_area.see(tk.END)
         
-        # 최근 텍스트 영역 업데이트
+        # 최근 텍스트 히스토리 영역 업데이트
         self.recent_text_area.delete(1.0, tk.END)
-        self.recent_text_area.insert(tk.END, self.recent_transcript)
+        self.recent_text_area.insert(tk.END, "\n".join(self.recent_history))
         self.recent_text_area.see(tk.END)
     
     def update_status(self, message):
@@ -223,6 +235,7 @@ class AudioSTTApp:
     def clear_transcript(self):
         self.transcript = ""
         self.recent_transcript = ""  # recent_transcript도 함께 초기화
+        self.recent_history = []  # 히스토리도 초기화
         self.text_area.delete(1.0, tk.END)
         self.recent_text_area.delete(1.0, tk.END)  # 최근 텍스트 영역도 초기화
     
