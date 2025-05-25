@@ -170,7 +170,15 @@ class AudioSTTApp:
             
             self.update_status("녹음 시작...")
             
-            r = sr.Recognizer()
+            # OpenAI Whisper 사용을 위한 클라이언트 설정
+            api_key = self.api_key_entry.get().strip()
+            if not api_key:
+                self.update_status("OpenAI API 키가 필요합니다.")
+                self.is_recording = False
+                self.record_button.config(text="녹음 시작")
+                return
+            
+            client = OpenAI(api_key=api_key)
             
             # 녹음 루프
             while self.is_recording:
@@ -192,18 +200,30 @@ class AudioSTTApp:
                     wf.setframerate(RATE)
                     wf.writeframes(b''.join(frames))
                 
-                # STT 변환
+                # OpenAI Whisper STT 변환
                 try:
-                    with sr.AudioFile(temp_wav) as source:
-                        audio = r.record(source)
-                        text = r.recognize_google(audio, language="ko-KR")
-                        self.update_transcript(text, success=True)  # 성공 플래그 추가
-                except sr.UnknownValueError:
-                    self.update_status("음성을 인식할 수 없습니다.")
-                    self.error_count += 1  # 오류 카운트 증가
-                except sr.RequestError:
-                    self.update_status("Google STT 서비스에 접근할 수 없습니다.")
-                    self.error_count += 1  # 오류 카운트 증가
+                    print(f"[DEBUG] OpenAI Whisper STT 변환 시작...")
+                    
+                    with open(temp_wav, "rb") as audio_file:
+                        transcript = client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            language="ko"  # 한국어 지정
+                        )
+                    
+                    text = transcript.text
+                    print(f"[DEBUG] Whisper STT 결과: '{text}'")
+                    
+                    if text.strip():  # 빈 텍스트가 아닌 경우만 처리
+                        self.update_transcript(text, success=True)
+                        self.error_count = 0  # 성공 시 오류 카운트 초기화
+                    else:
+                        print("[DEBUG] 빈 텍스트 결과, 건너뜀")
+                        
+                except Exception as stt_error:
+                    print(f"[ERROR] Whisper STT 오류: {str(stt_error)}")
+                    self.update_status(f"음성 인식 오류: {str(stt_error)}")
+                    self.error_count += 1
                 
                 # 임시 파일 삭제
                 try:
@@ -217,6 +237,7 @@ class AudioSTTApp:
             p.terminate()
             
         except Exception as e:
+            print(f"[ERROR] 녹음 오류: {str(e)}")
             self.update_status(f"오류 발생: {str(e)}")
             self.error_count += 1  # 오류 카운트 증가
             self.is_recording = False
