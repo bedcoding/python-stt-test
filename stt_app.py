@@ -283,9 +283,9 @@ class AudioSTTApp:
                                 self.error_count = 0
                                 
                                 # STT 완료 후 자동으로 ChatGPT API 호출
-                                if self.recent_transcript.strip():
-                                    print("[DEBUG] STT 완료, 자동으로 ChatGPT API 호출 시작...")
-                                    threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
+                                # if self.recent_transcript.strip():
+                                #     print("[DEBUG] STT 완료, 자동으로 ChatGPT API 호출 시작...")
+                                #     threading.Thread(target=self._call_chatgpt_api, args=(api_key, self.recent_transcript), daemon=True).start()
                             else:
                                 print("[DEBUG] 빈 텍스트 결과, 건너뜀")
                                 
